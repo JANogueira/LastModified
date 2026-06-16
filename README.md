@@ -1,5 +1,21 @@
 ## LastModified
 
+> **Fork notice** — This is a community fork of the original
+> [kudashevs/LastModified](https://github.com/kudashevs/LastModified) by Kudashev Sergey,
+> modernized to be **dual-compatible with MODX Revolution 2.x and 3.x** and **PHP 8.x**.
+>
+> **What this fork adds (v1.2.0-pl):**
+> - Dual compatibility: installs and runs unchanged on MODX 2.x and MODX 3.x
+> - PHP 8.x hardening (null guards, validated `strtotime()`, explicit option defaults)
+> - Bug fix: `OnDocFormSave` no longer relies on an undefined `$resource` variable
+> - New `lastModified` cache-busting snippet with path-traversal protection
+> - Portuguese (`pt`) lexicon
+> - Self-contained transport build system
+>
+> Full history is in `core/components/lastmodified/docs/changelog.txt`.
+> All original functionality and the MIT license are preserved.
+> Credit for the original plugin belongs to Kudashev Sergey.
+
 A MODx Revolution plugin which handles the If-Modified-Since request header and returns the Last-Modified response
 header with the 304 response code when it is necessary (more info and site check on https://last-modified.com/en/)
 

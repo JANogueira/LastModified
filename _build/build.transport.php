@@ -1,46 +1,35 @@
 <?php
 /**
- * LastModified build script
+ * LastModified transport package build script.
+ *
+ * Builds a dual-compat (MODX 2.x + 3.x) transport package.
  *
  * @package lastmodified
- * @subpackage build
  */
-$mtime = microtime();
-$mtime = explode(' ', $mtime);
-$mtime = $mtime[1] + $mtime[0];
-$tstart = $mtime;
 set_time_limit(0);
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
 
-require_once 'build.config.php';
-if (file_exists('build.model.php')) {
-    require_once 'build.model.php';
-}
+$tstart = microtime(true);
 
-/* define sources */
-$root = dirname(dirname(__FILE__)) . '/';
-$sources = [
-    'root' => $root,
-    'build' => $root . '_build/',
-    'data' => $root . '_build/data/',
-    'resolvers' => $root . '_build/resolvers/',
-    'docs' => $root . 'core/components/' . PKG_NAME_LOWER . '/docs/',
-    'plugins' => $root . 'core/components/' . PKG_NAME_LOWER . '/elements/plugins/',
-    //'lexicon' => $root . 'core/components/' . PKG_NAME_LOWER . '/lexicon/',
-    //'source_assets' => $root . 'assets/components/' . PKG_NAME_LOWER,
-    'source_core' => $root . 'core/components/' . PKG_NAME_LOWER,
-];
-unset($root);
+/* ── Paths ─────────────────────────────────────────────────────────────── */
+define('PKG_NAME', 'lastmodified');
+define('PKG_NAME_LOWER', strtolower(PKG_NAME));
+define('PKG_VERSION', '1.2.0');
+define('PKG_RELEASE', 'pl');
 
-/* override with your own MODx instance */
+$root = dirname(__DIR__, 2) . '/';
+$buildDir = __DIR__ . '/';
+$outputDir = $root . '_packages/lastmodified/';
+if (!is_dir($outputDir)) @mkdir($outputDir, 0755, true);
+
+/* ── Bootstrap MODX ────────────────────────────────────────────────────── */
+require_once $root . 'config.core.php';
 require_once MODX_CORE_PATH . 'model/modx/modx.class.php';
-require_once $sources['build'] . '/includes/functions.php';
-
 $modx = new modX();
 $modx->initialize('mgr');
 $modx->setLogLevel(modX::LOG_LEVEL_INFO);
 $modx->setLogTarget('ECHO');
-$modx->getService('error', 'error.modError');
-
 echo '<pre>';
 
 $modx->loadClass('transport.modPackageBuilder', '', false, true);
@@ -48,138 +37,184 @@ $builder = new modPackageBuilder($modx);
 $builder->createPackage(PKG_NAME_LOWER, PKG_VERSION, PKG_RELEASE);
 $builder->registerNamespace(PKG_NAME_LOWER, false, true, '{core_path}components/' . PKG_NAME_LOWER . '/');
 
-/* load system settings */
-if (defined('BUILD_SETTING_UPDATE')) {
-    $settings = include $sources['data'] . 'transport.settings.php';
-    if (!is_array($settings)) {
-        $modx->log(modX::LOG_LEVEL_ERROR, 'Could not package in settings.');
-    } else {
-        $attributes = [
-            xPDOTransport::UNIQUE_KEY => 'key',
-            xPDOTransport::PRESERVE_KEYS => true,
-            xPDOTransport::UPDATE_OBJECT => BUILD_SETTING_UPDATE,
-        ];
-        foreach ($settings as $setting) {
-            $vehicle = $builder->createVehicle($setting, $attributes);
-            $builder->putVehicle($vehicle);
-        }
-        $modx->log(modX::LOG_LEVEL_INFO, 'Packaged in ' . count($settings) . ' System Settings.');
-    }
-    unset($settings, $setting, $attributes);
-}
+/* ── Package attributes (changelog, readme, license, setup-options) ──── */
+$builder->setPackageAttributes(array(
+    'changelog' => file_get_contents($buildDir . 'CHANGELOG.txt'),
+    'license'   => file_get_contents($buildDir . 'LICENSE.txt'),
+    'readme'    => file_get_contents($buildDir . 'README.txt'),
+    'setup-options' => array(
+        'source' => $buildDir . 'setup-options.php',
+    ),
+    'requires'  => array(
+        'php' => '>=7.4.0',
+    ),
+));
 
-/* create category */
+/* ── Category vehicle ─────────────────────────────────────────────────── */
 $category = $modx->newObject('modCategory');
-$category->set('category', PKG_NAME);
+$category->set('id', 1);
+$category->set('category', 'LastModified');
 
-/* create category vehicle */
-$attr = [
+/* ── Plugin ────────────────────────────────────────────────────────────── */
+$plugin = $modx->newObject('modPlugin');
+$plugin->set('name', 'LastModified');
+$plugin->set('description', 'MODX Revolution plugin which handles the If-Modified-Since request header.');
+$plugin->set('plugincode', file_get_contents($buildDir . 'elements/plugins/plugin.lastmodified.php'));
+$plugin->set('static', 0);
+
+$events = array();
+$eventNames = array('OnWebPagePrerender', 'OnDocFormSave');
+foreach ($eventNames as $eventName) {
+    $evt = $modx->newObject('modPluginEvent');
+    $evt->fromArray(array(
+        'event' => $eventName,
+        'priority' => 0,
+        'propertyset' => 0,
+    ), '', true, true);
+    $events[] = $evt;
+}
+$plugin->addMany($events, 'PluginEvents');
+
+/* ── Snippet ───────────────────────────────────────────────────────────── */
+$snippet = $modx->newObject('modSnippet');
+$snippet->set('name', 'lastModified');
+$snippet->set('description', 'Appends filemtime timestamp to file path for cache-busting.');
+$snippet->set('snippet', file_get_contents($buildDir . 'elements/snippets/lastmodified.snippet.php'));
+$snippet->set('static', 0);
+
+/* ── Add elements to category ─────────────────────────────────────────── */
+$plugins = array($plugin);
+$category->addMany($plugins, 'Plugins');
+
+$snippets = array($snippet);
+$category->addMany($snippets, 'Snippets');
+
+/* ── Category vehicle attributes ──────────────────────────────────────── */
+$attr = array(
     xPDOTransport::UNIQUE_KEY => 'category',
     xPDOTransport::PRESERVE_KEYS => false,
     xPDOTransport::UPDATE_OBJECT => true,
     xPDOTransport::RELATED_OBJECTS => true,
-];
+    xPDOTransport::RELATED_OBJECT_ATTRIBUTES => array(
+        'Plugins' => array(
+            xPDOTransport::PRESERVE_KEYS => false,
+            xPDOTransport::UPDATE_OBJECT => true,
+            xPDOTransport::UNIQUE_KEY => 'name',
+            xPDOTransport::RELATED_OBJECTS => true,
+            xPDOTransport::RELATED_OBJECT_ATTRIBUTES => array(
+                'PluginEvents' => array(
+                    xPDOTransport::PRESERVE_KEYS => true,
+                    xPDOTransport::UPDATE_OBJECT => true,
+                    xPDOTransport::UNIQUE_KEY => array('pluginid', 'event'),
+                ),
+            ),
+        ),
+        'Snippets' => array(
+            xPDOTransport::PRESERVE_KEYS => false,
+            xPDOTransport::UPDATE_OBJECT => true,
+            xPDOTransport::UNIQUE_KEY => 'name',
+        ),
+    ),
+);
 
-/* add plugins */
-if (defined('BUILD_PLUGIN_UPDATE')) {
-    $attr[xPDOTransport::RELATED_OBJECT_ATTRIBUTES]['Plugins'] = [
-        xPDOTransport::PRESERVE_KEYS => false,
-        xPDOTransport::UPDATE_OBJECT => BUILD_PLUGIN_UPDATE,
-        xPDOTransport::UNIQUE_KEY => 'name',
-    ];
-    $attr[xPDOTransport::RELATED_OBJECT_ATTRIBUTES]['PluginEvents'] = [
-        xPDOTransport::PRESERVE_KEYS => true,
-        xPDOTransport::UPDATE_OBJECT => BUILD_PLUGIN_UPDATE,
-        xPDOTransport::UNIQUE_KEY => ['pluginid', 'event'],
-    ];
-    $plugins = include $sources['data'] . 'transport.plugins.php';
-    if (!is_array($plugins)) {
-        $modx->log(modX::LOG_LEVEL_ERROR, 'Could not package in plugins.');
-    } else {
-        $category->addMany($plugins);
-        $modx->log(modX::LOG_LEVEL_INFO, 'Packaged in ' . count($plugins) . ' plugins.');
-    }
-}
-
+/* ── File resolver for core/components ─────────────────────────────────── */
 $vehicle = $builder->createVehicle($category, $attr);
 
-/* now pack in resolvers */
-$vehicle->resolve('file', [
-    'source' => $sources['source_core'],
+// Prepare core/components source directory
+$coreSource = $buildDir . '_dist/core/components/' . PKG_NAME_LOWER . '/';
+@mkdir($coreSource . 'docs', 0755, true);
+@mkdir($coreSource . 'elements/plugins', 0755, true);
+@mkdir($coreSource . 'elements/snippets', 0755, true);
+@mkdir($coreSource . 'lexicon/en', 0755, true);
+@mkdir($coreSource . 'lexicon/ru', 0755, true);
+@mkdir($coreSource . 'lexicon/pt', 0755, true);
+
+copy($buildDir . 'CHANGELOG.txt', $coreSource . 'docs/changelog.txt');
+copy($buildDir . 'README.txt', $coreSource . 'docs/readme.txt');
+copy($buildDir . 'LICENSE.txt', $coreSource . 'docs/license.txt');
+copy($buildDir . 'elements/plugins/plugin.lastmodified.php', $coreSource . 'elements/plugins/plugin.lastmodified.php');
+copy($buildDir . 'elements/snippets/lastmodified.snippet.php', $coreSource . 'elements/snippets/lastmodified.snippet.php');
+copy($buildDir . 'lexicon/en/setting.inc.php', $coreSource . 'lexicon/en/setting.inc.php');
+copy($buildDir . 'lexicon/ru/setting.inc.php', $coreSource . 'lexicon/ru/setting.inc.php');
+copy($buildDir . 'lexicon/pt/setting.inc.php', $coreSource . 'lexicon/pt/setting.inc.php');
+
+$vehicle->resolve('file', array(
+    'source' => $coreSource,
     'target' => "return MODX_CORE_PATH . 'components/';",
-]);
+));
 
-foreach ($BUILD_RESOLVERS as $resolver) {
-    if ($vehicle->resolve('php', ['source' => $sources['resolvers'] . 'resolve.' . $resolver . '.php'])) {
-        $modx->log(modX::LOG_LEVEL_INFO, 'Added resolver "' . $resolver . '" to category.');
-    } else {
-        $modx->log(modX::LOG_LEVEL_INFO, 'Could not add resolver "' . $resolver . '" to category.');
-    }
-}
+// Package rename resolver
+$vehicle->resolve('php', array(
+    'source' => $buildDir . 'resolvers/package.resolver.php',
+));
 
-flush();
 $builder->putVehicle($vehicle);
 
-/* now pack in the license file, readme and setup options */
-$builder->setPackageAttributes([
-    'changelog' => file_get_contents($sources['docs'] . 'changelog.txt'),
-    'license' => file_get_contents($sources['docs'] . 'license.txt'),
-    'readme' => file_get_contents($sources['docs'] . 'readme.txt'),
-]);
-$modx->log(modX::LOG_LEVEL_INFO, 'Added package attributes and setup options.');
+/* ── System Settings ───────────────────────────────────────────────────── */
+$settings = array(
+    'lastmodified.response' => array('value' => 'private', 'xtype' => 'textfield', 'area' => 'lastmodified.main'),
+    'lastmodified.maxage' => array('value' => '3600', 'xtype' => 'numberfield', 'area' => 'lastmodified.main'),
+    'lastmodified.expires' => array('value' => '3600', 'xtype' => 'numberfield', 'area' => 'lastmodified.main'),
+    'lastmodified.update_parent' => array('value' => '', 'xtype' => 'combo-boolean', 'area' => 'lastmodified.main'),
+    'lastmodified.update_level' => array('value' => '1', 'xtype' => 'numberfield', 'area' => 'lastmodified.main'),
+    'lastmodified.update_start' => array('value' => '', 'xtype' => 'combo-boolean', 'area' => 'lastmodified.main'),
+    'lastmodified.prevent_authorized' => array('value' => '1', 'xtype' => 'combo-boolean', 'area' => 'lastmodified.main'),
+    'lastmodified.prevent_session' => array('value' => 'minishop2', 'xtype' => 'textfield', 'area' => 'lastmodified.main'),
+    'lastmodified.exclude' => array('value' => '', 'xtype' => 'textfield', 'area' => 'lastmodified.main'),
+);
 
-/* zip up package */
-$modx->log(modX::LOG_LEVEL_INFO, 'Packing up transport package zip...');
+foreach ($settings as $key => $data) {
+    $setting = $modx->newObject('modSystemSetting');
+    $setting->fromArray(array(
+        'key' => $key,
+        'value' => $data['value'],
+        'xtype' => $data['xtype'],
+        'namespace' => PKG_NAME_LOWER,
+        'area' => $data['area'],
+    ), '', true, true);
+
+    $vehicle = $builder->createVehicle($setting, array(
+        xPDOTransport::UNIQUE_KEY => 'key',
+        xPDOTransport::PRESERVE_KEYS => true,
+        xPDOTransport::UPDATE_OBJECT => false,
+    ));
+    $builder->putVehicle($vehicle);
+}
+
+/* ── Pack & zip ────────────────────────────────────────────────────────── */
 $builder->pack();
 
-$mtime = microtime();
-$mtime = explode(" ", $mtime);
-$mtime = $mtime[1] + $mtime[0];
-$tend = $mtime;
-$totalTime = ($tend - $tstart);
-$totalTime = sprintf("%2.4f s", $totalTime);
+// Move zip to output dir
+$zipName = PKG_NAME_LOWER . '-' . PKG_VERSION . '-' . PKG_RELEASE . '.transport.zip';
+$builtZip = MODX_CORE_PATH . 'packages/' . $zipName;
+$destZip = $outputDir . $zipName;
 
-$signature = $builder->getSignature();
-if (defined('PKG_AUTO_INSTALL') && PKG_AUTO_INSTALL) {
-    $sig = explode('-', $signature);
-    $versionSignature = explode('.', $sig[1]);
-
-    /* @var modTransportPackage $package */
-    if (!$package = $modx->getObject('transport.modTransportPackage', ['signature' => $signature])) {
-        $package = $modx->newObject('transport.modTransportPackage');
-        $package->set('signature', $signature);
-        $package->fromArray([
-            'created' => date('Y-m-d h:i:s'),
-            'updated' => null,
-            'state' => 1,
-            'workspace' => 1,
-            'provider' => 0,
-            'source' => $signature . '.transport.zip',
-            'package_name' => $sig[0],
-            'version_major' => $versionSignature[0],
-            'version_minor' => !empty($versionSignature[1]) ? $versionSignature[1] : 0,
-            'version_patch' => !empty($versionSignature[2]) ? $versionSignature[2] : 0,
-        ]);
-        if (!empty($sig[2])) {
-            $r = preg_split('/([0-9]+)/', $sig[2], -1, PREG_SPLIT_DELIM_CAPTURE);
-            if (is_array($r) && !empty($r)) {
-                $package->set('release', $r[0]);
-                $package->set('release_index', (isset($r[1]) ? $r[1] : '0'));
-            } else {
-                $package->set('release', $sig[2]);
-            }
-        }
-        $package->save();
+if (file_exists($builtZip)) {
+    // Move old package to old_packages if it exists
+    if (file_exists($destZip)) {
+        $oldDir = $outputDir . 'old_packages/';
+        if (!is_dir($oldDir)) @mkdir($oldDir, 0755, true);
+        $ts = date('Ymd-Hi');
+        rename($destZip, $oldDir . PKG_NAME_LOWER . '-' . PKG_VERSION . '-' . PKG_RELEASE . '_' . $ts . '.transport.zip');
     }
-
-    if ($package->install()) {
-        $modx->runProcessor('system/clearcache');
-    }
-}
-if (!empty($_GET['download'])) {
-    echo '<script>document.location.href = "/core/packages/' . $signature . '.transport.zip' . '";</script>';
+    copy($builtZip, $destZip);
+    $modx->log(modX::LOG_LEVEL_INFO, 'Package copied to: ' . $destZip);
 }
 
-$modx->log(modX::LOG_LEVEL_INFO, "\n<br />Execution time: {$totalTime}\n");
+// Clean up _dist
+$cleanDist = function($dir) use (&$cleanDist) {
+    if (!is_dir($dir)) return;
+    $items = scandir($dir);
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') continue;
+        $path = $dir . '/' . $item;
+        is_dir($path) ? $cleanDist($path) : unlink($path);
+    }
+    rmdir($dir);
+};
+$cleanDist($buildDir . '_dist');
 
+$tend = microtime(true);
+$totalTime = sprintf("%2.4f s", ($tend - $tstart));
+$modx->log(modX::LOG_LEVEL_INFO, "Package built in {$totalTime}");
 echo '</pre>';
